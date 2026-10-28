@@ -238,6 +238,8 @@ h1 em{font-style:normal;color:var(--gold)}
     </div>
 
     <button class="btn-primary gold" id="btnStart">▶ Começar · calibrar a voz</button>
+    <button class="btn-ghost" id="btnTestMic" style="margin-top:.6rem">🎤 Testar meu microfone primeiro</button>
+    <div id="micStatus" style="display:none;margin-top:.7rem;padding:.8rem 1rem;border-radius:11px;font-size:.85rem;line-height:1.5"></div>
 
     <div class="section-label">O que você vai treinar</div>
     <div class="cat-grid" id="catGrid"></div>
@@ -433,10 +435,36 @@ function micSupported(){
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
 
+/* Detecta navegador interno de app (Instagram, Facebook, WhatsApp, TikTok...).
+   Esses navegadores bloqueiam microfone — é a causa nº 1 de "não funciona". */
+function isInAppBrowser(){
+  var ua = navigator.userAgent || '';
+  return /FBAN|FBAV|FB_IAB|Instagram|Line\/|WhatsApp|Twitter|TikTok|musical_ly|Snapchat|Pinterest/i.test(ua);
+}
+
+function enviroDica(){
+  if(isInAppBrowser()){
+    return 'Você está abrindo dentro do Instagram, Facebook ou WhatsApp. ' +
+           'Esses navegadores internos bloqueiam o microfone. ' +
+           'Toque no menu (⋯) e escolha "Abrir no navegador" — Chrome ou Safari.';
+  }
+  if(location.protocol === 'file:'){
+    return 'Você abriu o arquivo direto do celular. Assim o microfone não é liberado. ' +
+           'Abra pelo LINK, no Chrome ou Safari.';
+  }
+  if(!window.isSecureContext){
+    return 'Esta página não está em conexão segura (HTTPS), e o navegador só libera microfone em HTTPS. ' +
+           'Use o link oficial enviado pela Keila.';
+  }
+  return null;
+}
+
 function ensureMic(){
   if(mic.ready) return Promise.resolve(true);
+
+  var dica = enviroDica();
   if(!micSupported()){
-    mic.error = 'Este navegador não libera microfone aqui. Abra o link em HTTPS (no celular funciona).';
+    mic.error = dica || 'Este navegador não libera microfone. Use Chrome ou Safari atualizado.';
     return Promise.resolve(false);
   }
   return navigator.mediaDevices.getUserMedia({
@@ -453,9 +481,17 @@ function ensureMic(){
     mic.ready = true;
     return true;
   }).catch(function(e){
-    mic.error = (e && e.name === 'NotAllowedError')
-      ? 'Microfone bloqueado. Libere o acesso nas permissões do navegador e recarregue.'
-      : 'Não consegui abrir o microfone: ' + (e && e.message ? e.message : e);
+    var nome = (e && e.name) ? e.name : '';
+    if(nome === 'NotAllowedError' || nome === 'SecurityError'){
+      mic.error = dica || 'Você negou o microfone. Toque no ícone de cadeado ao lado do endereço, ' +
+                  'permita o microfone e recarregue a página.';
+    } else if(nome === 'NotFoundError' || nome === 'DevicesNotFoundError'){
+      mic.error = 'Nenhum microfone encontrado neste aparelho.';
+    } else if(nome === 'NotReadableError'){
+      mic.error = 'O microfone está sendo usado por outro app. Feche-o e tente de novo.';
+    } else {
+      mic.error = (dica || 'Não consegui abrir o microfone') + (nome ? ' (' + nome + ')' : '');
+    }
     return false;
   });
 }
@@ -1263,6 +1299,70 @@ function carregarBest(){
 /* =========================================================
    16. LIGAÇÕES
    ========================================================= */
+/* --- aviso automático se estiver em navegador de app --- */
+(function(){
+  if(!isInAppBrowser()) return;
+  var box = $('micStatus');
+  if(!box) return;
+  box.style.display = 'block';
+  box.style.background = 'rgba(201,150,46,.12)';
+  box.style.border = '1px solid rgba(201,150,46,.45)';
+  box.style.color = '#7a5c12';
+  box.innerHTML = '<b>Atenção: você está dentro do Instagram/Facebook/WhatsApp.</b><br>' +
+    'Aqui o microfone fica bloqueado. Toque no menu ⋯ e escolha <b>"Abrir no navegador"</b> ' +
+    '(Chrome ou Safari) para o jogo funcionar.';
+})();
+
+/* --- teste de microfone explícito --- */
+$('btnTestMic').addEventListener('click', function(){
+  var box = $('micStatus');
+  box.style.display = 'block';
+  box.style.background = 'rgba(74,44,94,.07)';
+  box.style.border = '1px solid rgba(74,44,94,.2)';
+  box.style.color = '#4a2c5e';
+  box.textContent = 'Pedindo permissão do microfone…';
+
+  ensureMic().then(function(ok){
+    if(!ok){
+      box.style.background = 'rgba(179,65,63,.08)';
+      box.style.border = '1px solid rgba(179,65,63,.3)';
+      box.style.color = '#8c3230';
+      box.innerHTML = '<b>Não deu certo.</b><br>' + (mic.error || 'Erro desconhecido.');
+      return;
+    }
+    box.textContent = 'Agora cante um "á" por 2 segundos…';
+    var amostras = 0, pico = 0;
+    var t0 = performance.now();
+    var timer = setInterval(function(){
+      mic.analyser.getFloatTimeDomainData(mic.data);
+      var r = detectPitch(mic.data, ctx.sampleRate);
+      if(r.rms > pico) pico = r.rms;
+      if(r.freq > 0 && r.clarity >= 0.75) amostras++;
+      if(performance.now() - t0 > 2000){
+        clearInterval(timer);
+        if(amostras >= 6){
+          box.style.background = 'rgba(47,125,93,.08)';
+          box.style.border = '1px solid rgba(47,125,93,.3)';
+          box.style.color = '#256349';
+          box.innerHTML = '<b>Microfone funcionando ✓</b><br>Te ouvi ' + amostras + ' vezes. Pode começar.';
+        } else if(pico < 0.006){
+          box.style.background = 'rgba(201,150,46,.1)';
+          box.style.border = '1px solid rgba(201,150,46,.4)';
+          box.style.color = '#7a5c12';
+          box.innerHTML = '<b>O microfone abriu, mas não captou som.</b><br>' +
+            'Cante mais forte e mais perto. Se estiver usando caixa de som, use fone.';
+        } else {
+          box.style.background = 'rgba(201,150,46,.1)';
+          box.style.border = '1px solid rgba(201,150,46,.4)';
+          box.style.color = '#7a5c12';
+          box.innerHTML = '<b>Capturei som, mas não identifiquei a nota.</b><br>' +
+            'Cante uma vogal sustentada ("ááá"), sem sussurrar.';
+        }
+      }
+    }, 50);
+  });
+});
+
 $('btnStart').addEventListener('click', function(){
   ensureMic().then(function(ok){
     if(!ok){ alert(mic.error || 'Microfone indisponível.'); return; }
